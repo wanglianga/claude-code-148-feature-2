@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto'
 import db, { addEvent } from './db.js'
 import { createVisit } from './service.js'
+import { createFamilyReport, createMoodRecord, followUpMood, closeMoodCare } from './mood.js'
 
 const hash = (s) => createHash('sha256').update('nbv:' + s).digest('hex')
 const day = 86400000
@@ -79,7 +80,7 @@ export function seed() {
     bilirubin: 128, bilirubin_site: '额头', cord: '干燥', stool_count: 3, stool_color: '黄色', urine_count: 7,
     feeding_freq: 8, spit_up: '无', sleep: '正常', breast: '正常', mood: '平稳', care_ability: '良好' }, nurseRow)
 
-  createVisit({ appointment_id: appt4, archive_id: a4, visit_time: iso(-1, '09:20'), weight: 2320,
+  const v4 = createVisit({ appointment_id: appt4, archive_id: a4, visit_time: iso(-1, '09:20'), weight: 2320,
     bilirubin: 176, bilirubin_site: '胸口', cord: '结痂', stool_count: 2, stool_color: '黄绿色', urine_count: 5,
     feeding_freq: 6, spit_up: '偶尔', sleep: '易惊', breast: '涨奶', mood: '低落', care_ability: '薄弱' }, nurseRow)
 
@@ -95,6 +96,70 @@ export function seed() {
   createVisit({ appointment_id: appt2, archive_id: a2, visit_time: iso(-2, '09:40'), weight: 2700,
     bilirubin: 262, bilirubin_site: '额头', cord: '干燥', stool_count: 3, stool_color: '黄色', urine_count: 6,
     feeding_freq: 8, spit_up: '偶尔', sleep: '正常', breast: '正常', mood: '平稳', care_ability: '一般' }, nurseRow)
+
+  // —— 产妇情绪异常关怀（EPDS 量表、双来源冲突、行动与回访追踪、权限分级） ——
+  // 场景 A：赵敏（a4）——家属 D-2 晚代述与产妇 D-1 访视表述冲突；EPDS 16 分、第10题阳性（紧急）
+  createFamilyReport(a4, {
+    recorded_at: iso(-2, '19:30'),
+    crying: true, sleep_quality: '严重不足', family_support: '充分',
+    care_pressure: '丈夫说家里照顾得挺好，就是她自己爱哭',
+    self_harm_concern: false,
+  }, { id: null, name: '赵敏丈夫（代述）' })
+  const moodA = createMoodRecord(a4, {
+    visit_id: v4.visit.id,
+    recorded_at: iso(-1, '09:30'),
+    // EPDS 16 分（第10题=2，提示自伤想法）：1/2 题正向计分，其余反向
+    epds_detail: [
+      { q: 1, a: 1 }, { q: 2, a: 1 }, { q: 3, a: 1 }, { q: 4, a: 1 }, { q: 5, a: 1 },
+      { q: 6, a: 1 }, { q: 7, a: 2 }, { q: 8, a: 2 }, { q: 9, a: 2 }, { q: 10, a: 2 },
+    ],
+    crying: 1, sleep_quality: '严重不足', family_support: '不足',
+    self_harm_note: '产妇低声说夜里有过“抱着宝宝一起解脱”的念头，白天没有；嘱 24 小时不离人',
+    care_pressure: '夜间独自喂奶哄睡，丈夫长期加班；婆婆只关注宝宝吃奶，产妇觉得“没人关心我”',
+    risk_factors: ['照护压力', '睡眠不足', '家庭支持不足'],
+    suggestion: '当日联系妇保门诊心理门诊加号；今日起每 24 小时电话回访；指导家属夜间分担照护、避免说教；2 周后复评 EPDS',
+    family_notice: '妈妈最近睡眠少、情绪脆弱，这是产后常见现象。请家人多分担夜间照护、多倾听陪伴，社区可提供免费心理咨询与妇保门诊',
+    nurse_note: '丈夫病耻感较强，当面认为“产妇矫情”，暂未向其出示 EPDS 评分与自伤条目；产妇请求对家属保密具体分数。上门时单独与产妇沟通',
+    followup_plan: ['转妇保门诊', '增加电话回访', '心理咨询'],
+  }, nurseRow)
+  followUpMood(moodA.mood.id, {
+    care_status: '已接受', mood_trend: '持平',
+    note: '已接通社区心理热线 1 次，丈夫同意今日陪同妇保门诊；夜间仍只能睡 3~4 小时，明早继续回访',
+  }, nurseRow)
+
+  // 场景 B：王雪（a2）——家属代述“持续哭泣”，产妇访视时否认；EPDS 10 分，经关怀后好转已结束
+  createFamilyReport(a2, {
+    recorded_at: iso(-2, '20:00'),
+    crying: true, sleep_quality: '间断', family_support: '一般',
+    care_pressure: '白天总是掉眼泪，奶也少，孩子一哭她就慌',
+    self_harm_concern: false,
+  }, { id: fam2, name: '王雪母亲（代述）' })
+  const moodB = createMoodRecord(a2, {
+    visit_id: null,
+    recorded_at: iso(-2, '09:50'),
+    // EPDS 10 分（9~12 情绪困扰区间，无自伤想法）
+    epds_detail: [
+      { q: 1, a: 1 }, { q: 2, a: 2 }, { q: 3, a: 1 }, { q: 4, a: 1 }, { q: 5, a: 0 },
+      { q: 6, a: 1 }, { q: 7, a: 2 }, { q: 8, a: 1 }, { q: 9, a: 1 }, { q: 10, a: 0 },
+    ],
+    crying: 0, sleep_quality: '间断', family_support: '不足',
+    care_pressure: '担心母乳不够、宝宝黄疸；与婆婆育儿观念不一致',
+    risk_factors: ['照护压力', '睡眠不足'],
+    suggestion: '安排心理咨询 1 次，增加电话回访；指导家属认可其付出，1~2 周复评',
+    family_notice: '妈妈产后适应较辛苦，请家人多肯定和帮忙，社区有免费心理咨询可随时报名',
+    nurse_note: '产妇当面否认哭泣（与家属代述冲突），已分别记录两份来源；电话回访更易说出真实感受',
+    followup_plan: ['心理咨询', '增加电话回访'],
+  }, nurseRow)
+  followUpMood(moodB.mood.id, { care_status: '考虑中', mood_trend: '好转', note: '情绪好转、哭泣减少，心理咨询时间与家属商量中' }, nurseRow)
+  closeMoodCare(moodB.mood.id, nurseRow, '连续两次回访情绪好转、睡眠改善，结束本轮关怀，按需随访')
+
+  // 场景 C：李婷（a1，家属账号 family 今日 08:00 代述）——护士 09:30 初访前待核实
+  createFamilyReport(a1, {
+    recorded_at: iso(0, '08:00'),
+    crying: true, sleep_quality: '间断', family_support: '一般',
+    care_pressure: '新手爸妈，夜间喂奶无人替换，妻子总说自己做不好',
+    self_harm_concern: false,
+  }, { id: fam1, name: '李婷丈夫 陈先生（代述）' })
 
   // —— 未开门事件 + 再次预约事项 ——
   addEvent(a5, '未开门', '上门访视家属未开门', '敲门无人应答，电话未接通，已留联系卡', '王芳')

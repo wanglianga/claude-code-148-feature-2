@@ -4,9 +4,11 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { api } from '../../api'
 import type { ArchiveDetail as Detail, Followup, Visit } from '../../types'
 import { AgeText, APPT_STATUS_COLOR, Badge, Empty, FOLLOWUP_TYPE_COLOR, Modal, RiskBadge, fmtTime, toast } from '../../components/ui'
+import { MoodRecordCard, SourceCompare } from '../../components/MoodCare'
+import type { MoodRecord } from '../../types'
 import { useAuth } from '../../store/auth'
 
-const TABS = ['概览', '访视记录', '复查转诊', '材料咨询', '时间线']
+const TABS = ['概览', '访视记录', '情绪关怀', '复查转诊', '材料咨询', '时间线']
 
 export default function ArchiveDetail() {
   const { id } = useParams()
@@ -53,6 +55,7 @@ export default function ArchiveDetail() {
 
       {tab === '概览' && <OverviewTab d={data} />}
       {tab === '访视记录' && <VisitsTab visits={data.visits} />}
+      {tab === '情绪关怀' && <MoodTab records={data.mood_records || []} onChanged={load} />}
       {tab === '复查转诊' && <FollowupsTab followups={data.followups} onChanged={load} />}
       {tab === '材料咨询' && <DocsConsultsTab d={data} onChanged={load} />}
       {tab === '时间线' && (
@@ -162,6 +165,30 @@ function VisitsTab({ visits }: { visits: Visit[] }) {
   )
 }
 
+function MoodTab({ records, onChanged }: { records: MoodRecord[]; onChanged: () => void }) {
+  const user = useAuth((s) => s.user)
+  const active = records.filter((r) => r.status !== '已结束')
+  const closed = records.filter((r) => r.status === '已结束')
+  return (
+    <div>
+      {records.length === 0 && <Empty text="暂无情绪关怀记录。访视中发现产妇持续哭泣/睡眠差时，可在访视表单「产妇情绪异常关怀」中记录 EPDS 量表" icon="💗" />}
+      {records.length > 0 && <SourceCompare records={records} />}
+      {active.length > 0 && (
+        <>
+          <div className="strong mb8">关怀中 / 待核实（{active.length}）</div>
+          {active.map((r) => <MoodRecordCard key={r.id} rec={r} onChanged={onChanged} />)}
+        </>
+      )}
+      {closed.length > 0 && (
+        <>
+          <div className="strong mb8 mt12">已结束（{closed.length}）</div>
+          {closed.map((r) => <MoodRecordCard key={r.id} rec={r} onChanged={user?.role === 'nurse' ? onChanged : undefined} />)}
+        </>
+      )}
+    </div>
+  )
+}
+
 export function FollowupsTab({ followups, onChanged, doctor }: { followups: Followup[]; onChanged: () => void; doctor?: boolean }) {
   const [closing, setClosing] = useState<Followup | null>(null)
   const [deciding, setDeciding] = useState<Followup | null>(null)
@@ -230,10 +257,13 @@ function DecideModal({ f, onClose, onDone }: { f: Followup; onClose: () => void;
       <div className="field">
         <label>处置决定</label>
         <div className="seg">
-          {['复查', '转诊', '电话随访', '母乳指导', '继续观察'].map((d) => (
+          {['复查', '转诊', '电话随访', '母乳指导', '心理咨询', '转妇保门诊', '增加电话回访', '继续观察'].map((d) => (
             <span key={d} className={`opt ${decision === d ? 'on' : ''}`} onClick={() => setDecision(d)}>{d}</span>
           ))}
         </div>
+        {['心理咨询', '转妇保门诊', '增加电话回访'].includes(decision) && (
+          <div className="hint" style={{ color: 'var(--red)' }}>情绪关怀处置将生成敏感事项：家属端只显示温和提醒，不显示量表分与临床细节。</div>
+        )}
       </div>
       {decision === '复查' && (
         <div className="field">

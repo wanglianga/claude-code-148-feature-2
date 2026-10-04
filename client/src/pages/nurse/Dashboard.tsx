@@ -26,9 +26,19 @@ export default function Dashboard() {
       <div className="grid4 mb12">
         <Stat num={s.unvisited} label="未访视家庭" color="amber" onClick={() => nav('/nurse/appointments')} />
         <Stat num={s.jaundiceAlerts} label="异常黄疸/复查" color="coral" onClick={() => nav('/nurse/archives?filter=jaundice')} />
-        <Stat num={s.maternalRisks} label="产妇风险" color="red" onClick={() => nav('/nurse/archives?filter=maternal')} />
+        <Stat num={s.moodSelfHarm + s.moodActive} label="产妇情绪关怀" color="red" onClick={() => nav('/nurse/mood')} />
         <Stat num={s.openFollowups} label="待闭环事项" color="teal" onClick={() => nav('/nurse/followups')} />
       </div>
+
+      {(s.moodSelfHarm > 0 || s.moodPendingVerify > 0) && (
+        <div className={`alert-box ${s.moodSelfHarm > 0 ? 'danger' : 'warn'} row between`}>
+          <span>
+            {s.moodSelfHarm > 0 && <b>🚨 {s.moodSelfHarm} 个家庭的产妇存在自伤想法，需立即处置　</b>}
+            {s.moodPendingVerify > 0 && <>👪 {s.moodPendingVerify} 条家属代述情绪观察待上门核实</>}
+          </span>
+          <Link to="/nurse/mood" className={`btn sm ${s.moodSelfHarm > 0 ? 'danger' : 'primary'}`}>情绪关怀中心</Link>
+        </div>
+      )}
 
       {drafts.length > 0 && (
         <div className="alert-box warn row between">

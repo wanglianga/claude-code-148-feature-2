@@ -8,9 +8,11 @@ import Archives from './pages/nurse/Archives'
 import ArchiveDetail from './pages/nurse/ArchiveDetail'
 import VisitForm from './pages/nurse/VisitForm'
 import Followups from './pages/nurse/Followups'
+import MoodCare from './pages/nurse/MoodCare'
 import SyncCenter from './pages/nurse/SyncCenter'
 import FamilyHome from './pages/family/FamilyHome'
 import FamilyVisits from './pages/family/FamilyVisits'
+import FamilyMood from './pages/family/FamilyMood'
 import FamilyDocs from './pages/family/FamilyDocs'
 import FamilyConsult from './pages/family/FamilyConsult'
 
@@ -40,10 +42,13 @@ export default function App() {
         <Route path="/nurse/archives/:id" element={<ArchiveDetail />} />
         <Route path="/nurse/visit/new" element={<VisitForm />} />
         <Route path="/nurse/followups" element={<Followups />} />
+        <Route path="/nurse/mood" element={<MoodCare />} />
         <Route path="/nurse/sync" element={<SyncCenter />} />
         <Route path="/doctor" element={<Followups doctor />} />
+        <Route path="/doctor/mood" element={<MoodCare doctor />} />
         <Route path="/family" element={<FamilyHome />} />
         <Route path="/family/visits" element={<FamilyVisits />} />
+        <Route path="/family/mood" element={<FamilyMood />} />
         <Route path="/family/docs" element={<FamilyDocs />} />
         <Route path="/family/consult" element={<FamilyConsult />} />
       </Route>

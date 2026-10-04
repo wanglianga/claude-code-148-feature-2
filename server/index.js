@@ -8,6 +8,11 @@ import db, { addEvent } from './db.js'
 import { seed } from './seed.js'
 import { createVisit, closeFollowup } from './service.js'
 import { assessVisit } from './risk.js'
+import {
+  createMoodRecord, createFamilyReport, followUpMood, closeMoodCare,
+  getMoodRecords, moodCareList, serializeFor, epdsScore, selfHarmFrom,
+  MOOD_PLAN_TYPES, ensurePlanFollowup,
+} from './mood.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -43,6 +48,18 @@ app.post('/api/auth/logout', auth, (req, res) => {
 app.get('/api/me', auth, (req, res) => res.json({ user: pubUser(req.user) }))
 const pubUser = (u) => ({ id: u.id, username: u.username, role: u.role, name: u.name, title: u.title, phone: u.phone })
 
+// 产妇情绪相关敏感信息：家属端访视记录中需剔除（量表分/自伤/情绪判断/心理妇保转介等）
+const SENSITIVE_RE = /EPDS|自伤|伤害自己|持续哭泣|情绪(低落|异常|焦虑|困扰|关怀)|睡眠严重不足|家庭支持不足|心理咨询|妇保门诊|心理危机|心理疏导/
+function sanitizeVisitForFamily(v) {
+  const { mood, ...rest } = v
+  return {
+    ...rest,
+    mood: '平稳',
+    flags: (v.flags || []).filter((x) => !SENSITIVE_RE.test(x)),
+    advice: (v.advice || '').split('\n').filter((l) => l.trim() && !SENSITIVE_RE.test(l)).join('\n'),
+  }
+}
+
 // ---------- 工作台 ----------
 app.get('/api/dashboard', auth, requireRole('nurse', 'doctor'), (req, res) => {
   const today = new Date()
@@ -63,6 +80,9 @@ app.get('/api/dashboard', auth, requireRole('nurse', 'doctor'), (req, res) => {
       maternalRisks: cnt(`SELECT COUNT(DISTINCT archive_id) c FROM followups WHERE status!='已闭环' AND type='电话随访'`),
       openFollowups: openFollowups.length,
       todayAppointments: cnt(`SELECT COUNT(*) c FROM appointments WHERE date(scheduled_time)=date(?) AND status='待访视'`, todayStr + ' 12:00'),
+      moodSelfHarm: cnt(`SELECT COUNT(DISTINCT archive_id) c FROM mood_records WHERE status!='已结束' AND self_harm=1`),
+      moodPendingVerify: cnt(`SELECT COUNT(*) c FROM mood_records WHERE status='待核实'`),
+      moodActive: cnt(`SELECT COUNT(DISTINCT archive_id) c FROM mood_records WHERE status='进行中'`),
     },
     followupsByType: byType,
     todayAppointments: appts,
@@ -142,6 +162,10 @@ app.get('/api/archives', auth, requireRole('nurse', 'doctor'), (req, res) => {
   if (filter === 'jaundice') rows = rows.filter(r => r.last_bilirubin != null && ['高', '危急'].includes(r.last_risk))
   if (filter === 'maternal') rows = rows.filter(r =>
     db.prepare(`SELECT COUNT(*) c FROM followups WHERE archive_id=? AND status!='已闭环' AND type='电话随访'`).get(r.id).c > 0)
+  if (filter === 'mood') {
+    const moodIds = new Set(db.prepare(`SELECT DISTINCT archive_id FROM mood_records WHERE status!='已结束'`).all().map(x => x.archive_id))
+    rows = rows.filter(r => moodIds.has(r.id))
+  }
   if (filter === 'unclosed') rows = rows.filter(r => r.open_followups > 0)
   res.json({ archives: rows })
 })
@@ -152,14 +176,28 @@ app.get('/api/archives/:id', auth, (req, res) => {
   if (req.user.role === 'family' && archive.family_user_id !== req.user.id) return res.status(403).json({ error: '无权访问' })
   const visits = db.prepare('SELECT * FROM visits WHERE archive_id=? ORDER BY visit_time DESC').all(archive.id)
     .map(v => ({ ...v, flags: JSON.parse(v.flags || '[]'), photos: JSON.parse(v.photos || '[]') }))
+    .map(v => req.user.role === 'family' ? sanitizeVisitForFamily(v) : v)
+  const rawFollowups = db.prepare('SELECT * FROM followups WHERE archive_id=? ORDER BY created_at DESC').all(archive.id)
+  const followups = req.user.role === 'family'
+    ? rawFollowups.filter(f => !f.sensitive || !!f.family_title)
+      .map(f => f.sensitive
+        ? { ...f, title: f.family_title, detail: '', created_by: '社区卫生服务中心' }
+        : f)
+    : rawFollowups
+  const rawEvents = db.prepare('SELECT * FROM events WHERE archive_id=? ORDER BY created_at DESC, id DESC LIMIT 100').all(archive.id)
+  // 时间线中的情绪关怀临床细节（EPDS/自伤/归因）不对家属展示
+  const events = req.user.role === 'family'
+    ? rawEvents.filter(e => e.kind !== '情绪关怀')
+    : rawEvents
   res.json({
     archive,
     appointments: db.prepare('SELECT a.*, u.name nurse_name FROM appointments a LEFT JOIN users u ON u.id=a.nurse_id WHERE a.archive_id=? ORDER BY a.scheduled_time DESC').all(archive.id),
     visits,
-    followups: db.prepare('SELECT * FROM followups WHERE archive_id=? ORDER BY created_at DESC').all(archive.id),
+    followups,
+    mood_records: getMoodRecords(archive.id).map(m => serializeFor(m, req.user.role, archive.family_user_id)),
     documents: db.prepare('SELECT id, archive_id, type, filename, data_url, note, created_at FROM documents WHERE archive_id=? ORDER BY created_at DESC').all(archive.id),
     consults: db.prepare('SELECT * FROM consults WHERE archive_id=? ORDER BY created_at DESC').all(archive.id),
-    events: db.prepare('SELECT * FROM events WHERE archive_id=? ORDER BY created_at DESC, id DESC LIMIT 100').all(archive.id),
+    events,
   })
 })
 
@@ -215,18 +253,24 @@ app.post('/api/followups/:id/decide', auth, requireRole('doctor', 'nurse'), (req
   const f = db.prepare('SELECT * FROM followups WHERE id=?').get(req.params.id)
   if (!f) return res.status(404).json({ error: '随访事项不存在' })
   const { decision, note = '', dueDate } = req.body || {}
-  const valid = ['复查', '转诊', '电话随访', '母乳指导', '继续观察']
+  const valid = ['复查', '转诊', '电话随访', '母乳指导', '继续观察', ...MOOD_PLAN_TYPES]
   if (!valid.includes(decision)) return res.status(400).json({ error: '无效决策' })
   addEvent(f.archive_id, '决策', `医生决策：${decision}`, note || `针对【${f.type}】${f.title}`, req.user.name)
   closeFollowup(f.id, req.user.name, `医生决策：${decision}${note ? ' - ' + note : ''}`)
   if (decision !== '继续观察') {
-    db.prepare(`INSERT INTO followups (archive_id, visit_id, type, title, detail, due_date, created_by)
-                VALUES (?,?,?,?,?,?,?)`)
-      .run(f.archive_id, f.visit_id, decision, `医生决策：${decision}`, note || `来源：【${f.type}】${f.title}`,
-        dueDate || null, req.user.name)
-    if (decision === '复查' && dueDate) {
-      db.prepare(`INSERT INTO appointments (archive_id, nurse_id, type, scheduled_time, reason) VALUES (?,?,?,?,?)`)
-        .run(f.archive_id, null, '复查', `${dueDate} 09:00`, '医生决策安排')
+    if (MOOD_PLAN_TYPES.includes(decision)) {
+      // 情绪类处置 → 敏感随访事项（家属端仅展示温和提醒）
+      ensurePlanFollowup(f.archive_id, decision, req.user.name,
+        `医生决策：${decision}。${note || `来源：【${f.type}】${f.title}`}`, null, decision === '转妇保门诊')
+    } else {
+      db.prepare(`INSERT INTO followups (archive_id, visit_id, type, title, detail, due_date, created_by)
+                  VALUES (?,?,?,?,?,?,?)`)
+        .run(f.archive_id, f.visit_id, decision, `医生决策：${decision}`, note || `来源：【${f.type}】${f.title}`,
+          dueDate || null, req.user.name)
+      if (decision === '复查' && dueDate) {
+        db.prepare(`INSERT INTO appointments (archive_id, nurse_id, type, scheduled_time, reason) VALUES (?,?,?,?,?)`)
+          .run(f.archive_id, null, '复查', `${dueDate} 09:00`, '医生决策安排')
+      }
     }
   }
   res.json({ ok: true })
@@ -238,13 +282,21 @@ app.get('/api/family/overview', auth, requireRole('family'), (req, res) => {
   if (!archive) return res.status(404).json({ error: '未关联母婴档案' })
   const visits = db.prepare('SELECT * FROM visits WHERE archive_id=? ORDER BY visit_time DESC').all(archive.id)
     .map(v => ({ ...v, flags: JSON.parse(v.flags || '[]'), photos: JSON.parse(v.photos || '[]') }))
+    .map(sanitizeVisitForFamily)
+  // 敏感随访事项：家属端仅展示护士为家属准备的温和提醒（family_title），其余完全隐藏
   const followups = db.prepare(`SELECT * FROM followups WHERE archive_id=? AND status!='已闭环' ORDER BY created_at DESC`).all(archive.id)
+    .filter(f => !f.sensitive || !!f.family_title)
+    .map(f => f.sensitive
+      ? { id: f.id, archive_id: f.archive_id, type: f.type === '转妇保门诊' || f.type === '心理咨询' ? '情绪关怀' : '电话回访', title: f.family_title, detail: '', status: f.status, due_date: f.due_date, created_by: '社区卫生服务中心', created_at: f.created_at, sensitive: 1 }
+      : f)
   const nextAppt = db.prepare(`SELECT * FROM appointments WHERE archive_id=? AND status='待访视' ORDER BY scheduled_time LIMIT 1`).get(archive.id)
   res.json({
     archive, visits, followups, nextAppointment: nextAppt || null,
     appointments: db.prepare('SELECT * FROM appointments WHERE archive_id=? ORDER BY scheduled_time DESC').all(archive.id),
     documents: db.prepare('SELECT id, type, filename, data_url, note, created_at FROM documents WHERE archive_id=? ORDER BY created_at DESC').all(archive.id),
     consults: db.prepare('SELECT * FROM consults WHERE archive_id=? ORDER BY created_at DESC').all(archive.id),
+    mood_records: getMoodRecords(archive.id).map(m => serializeFor(m, 'family', req.user.id)),
+    mood_notices: db.prepare(`SELECT DISTINCT family_title FROM followups WHERE archive_id=? AND sensitive=1 AND family_title!='' AND status!='已闭环'`).all(archive.id).map(x => x.family_title),
   })
 })
 
@@ -291,6 +343,72 @@ app.post('/api/consults/:id/reply', auth, requireRole('nurse', 'doctor'), (req, 
 })
 
 app.get('/api/health', (req, res) => res.json({ ok: true, ts: Date.now() }))
+
+// ---------- 产妇情绪异常关怀 ----------
+// 护士关怀中心（医生只读：可见临床内容，护士内部备注按角色脱敏）
+app.get('/api/mood/care', auth, requireRole('nurse', 'doctor'), (req, res) => {
+  const groups = moodCareList().map(g => ({
+    ...g,
+    records: g.records.map(m => serializeFor(m, req.user.role)),
+    latest: serializeFor(g.latest, req.user.role),
+  }))
+  res.json({ groups })
+})
+
+app.get('/api/mood/records/:archiveId', auth, (req, res) => {
+  const archive = db.prepare('SELECT * FROM archives WHERE id=?').get(req.params.archiveId)
+  if (!archive) return res.status(404).json({ error: '档案不存在' })
+  if (req.user.role === 'family' && archive.family_user_id !== req.user.id) return res.status(403).json({ error: '无权访问' })
+  res.json({ mood_records: getMoodRecords(archive.id).map(m => serializeFor(m, req.user.role, req.user.id)) })
+})
+
+// 护士新建/核实情绪关怀记录（含 EPDS 量表、自伤想法、双来源核实）
+app.post('/api/mood/records', auth, requireRole('nurse'), (req, res) => {
+  try {
+    const archiveId = Number(req.body?.archive_id)
+    if (!archiveId) return res.status(400).json({ error: '缺少档案' })
+    const result = createMoodRecord(archiveId, req.body || {}, req.user)
+    res.status(201).json(result)
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message })
+  }
+})
+
+// 后续回访：追踪情绪变化与是否接受帮助
+app.post('/api/mood/records/:id/followup', auth, requireRole('nurse'), (req, res) => {
+  try {
+    res.json(followUpMood(Number(req.params.id), req.body || {}, req.user))
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message })
+  }
+})
+
+app.post('/api/mood/records/:id/close', auth, requireRole('nurse'), (req, res) => {
+  const f = closeMoodCare(Number(req.params.id), req.user, req.body?.note || '')
+  if (!f) return res.status(404).json({ error: '情绪关怀记录不存在' })
+  res.json({ ok: true })
+})
+
+// 家属端代述：提交对产妇情绪/睡眠/支持的观察，等待护士上门核实（不展示评分）
+app.post('/api/family/mood-report', auth, requireRole('family'), (req, res) => {
+  const arch = db.prepare('SELECT * FROM archives WHERE family_user_id=?').get(req.user.id)
+  if (!arch) return res.status(404).json({ error: '未关联母婴档案' })
+  const b = req.body || {}
+  try {
+    const result = createFamilyReport(arch.id, {
+      recorded_at: b.recorded_at,
+      crying: !!b.crying,
+      sleep_quality: ['良好', '间断', '严重不足'].includes(b.sleep_quality) ? b.sleep_quality : '',
+      family_support: ['充分', '一般', '不足'].includes(b.family_support) ? b.family_support : '',
+      care_pressure: String(b.care_pressure || '').slice(0, 500),
+      self_harm: !!b.self_harm_concern,
+      self_harm_note: String(b.self_harm_note || '').slice(0, 500),
+    }, req.user)
+    res.status(201).json(result)
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message })
+  }
+})
 
 // ---------- 生产模式：托管前端构建产物 ----------
 const dist = path.join(__dirname, '..', 'client', 'dist')

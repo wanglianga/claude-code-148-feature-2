@@ -1,6 +1,7 @@
 // 访视落库与随访闭环的领域服务：种子数据与 HTTP 路由共用，保证行为一致
 import db, { addEvent } from './db.js'
 import { assessVisit } from './risk.js'
+import { createMoodRecord } from './mood.js'
 
 const VISIT_COLS = ['client_id','appointment_id','archive_id','nurse_id','visit_time','weight','bilirubin',
   'bilirubin_site','cord','stool_count','stool_color','urine_count','feeding_type','feeding_freq','spit_up',
@@ -56,7 +57,7 @@ export function createVisit(payload, nurse) {
     photos: JSON.stringify(payload.photos || []),
     created_offline: payload.created_offline ? 1 : 0,
   }
-  const r = assessVisit(archive, v)
+  const r = assessVisit(archive, { ...v, mood_care: payload.mood_care })
   v.risk_level = r.riskLevel
   v.flags = JSON.stringify(r.flags)
   v.need_recheck = r.needRecheck; v.need_referral = r.needReferral
@@ -68,6 +69,17 @@ export function createVisit(payload, nurse) {
   const info = db.prepare(`INSERT INTO visits (${cols}) VALUES (${marks})`)
     .run(...VISIT_COLS.map(c => v[c]))
   const visitId = info.lastInsertRowid
+
+  // 情绪关怀：访视中记录了 EPDS/持续哭泣/自伤想法等，联动落情绪关怀记录并生成处置行动
+  let moodResult = null
+  const mc = payload.mood_care
+  if (mc && (mc.epds_detail?.length || mc.self_harm || mc.crying || mc.family_notice || mc.nurse_note || mc.suggestion)) {
+    moodResult = createMoodRecord(archive.id, {
+      ...mc,
+      visit_id: visitId,
+      recorded_at: mc.recorded_at || v.visit_time,
+    }, nurse)
+  }
 
   // 预约状态联动
   if (v.appointment_id) {
@@ -103,7 +115,7 @@ export function createVisit(payload, nurse) {
     summary + (v.device_issue ? '。【设备故障，手工记录】' : '') + (v.created_offline ? '。【离线草稿补录同步】' : ''),
     nurseName)
 
-  return { visit: db.prepare('SELECT * FROM visits WHERE id=?').get(visitId), duplicated: false, assessment: r }
+  return { visit: db.prepare('SELECT * FROM visits WHERE id=?').get(visitId), duplicated: false, assessment: r, mood: moodResult }
 }
 
 function num(x) { return x === undefined || x === null || x === '' ? null : Number(x) }

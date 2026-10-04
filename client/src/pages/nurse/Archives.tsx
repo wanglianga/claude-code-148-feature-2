@@ -10,6 +10,7 @@ const FILTERS = [
   { key: 'unvisited', label: '未访视' },
   { key: 'jaundice', label: '异常黄疸' },
   { key: 'maternal', label: '产妇风险' },
+  { key: 'mood', label: '情绪关怀' },
   { key: 'unclosed', label: '待闭环' },
 ]
 

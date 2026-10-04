@@ -1,6 +1,7 @@
 // 新生儿黄疸与访视综合风险引擎
 // 不只看单次黄疸值：综合 出生天数、体重变化、喂养次数、排便颜色、产妇恢复、家庭照护能力
 // 供服务端落库使用；前端有一份同构实现用于表单实时预评估（client/src/risk.ts）
+import { epdsScore, selfHarmFrom } from './mood.js'
 
 // 经皮胆红素光疗参考阈值（µmol/L，按出生天数，足月儿简化曲线）
 export function bilirubinThreshold(ageDays) {
@@ -126,6 +127,27 @@ export function assessVisit(archive, v) {
     raise(1)
     flags.push('产妇情绪焦虑')
     advice.push('产妇情绪焦虑，加强心理疏导与家庭支持。')
+  }
+  // 情绪关怀量表（EPDS）结论：写入标记与建议，但不抬升新生儿黄疸转诊等级；
+  // 情绪相关随访事项（心理咨询/增加回访/妇保门诊）由 mood.js 独立生成，避免误开儿科转诊
+  const mc = v.mood_care
+  if (mc && (mc.epds_detail?.length || mc.self_harm || mc.crying || mc.epds_score != null)) {
+    const sh = mc.self_harm ? 1 : (mc.epds_detail?.length ? selfHarmFrom(mc.epds_detail) : 0)
+    const score = mc.epds_score != null ? Number(mc.epds_score)
+      : (mc.epds_detail?.length ? epdsScore(mc.epds_detail) : -1)
+    if (sh) {
+      flags.push('产妇有自伤想法（EPDS 第10题阳性），需紧急心理关怀')
+      advice.push('产妇存在自伤想法：立即确保 24 小时有人陪伴、移除危险物品，并转妇保门诊/心理危机干预。')
+    } else if (score >= 13) {
+      flags.push(`EPDS ${score} 分，达到产后抑郁高分线（≥13）`)
+      advice.push('EPDS 高分，建议安排心理咨询并转妇保门诊进一步评估。')
+    } else if (score >= 9) {
+      flags.push(`EPDS ${score} 分，提示产后情绪困扰（9~12 分）`)
+      advice.push('EPDS 提示情绪困扰，建议心理咨询并增加电话回访，1~2 周后复评。')
+    }
+    if (mc.crying) flags.push('产妇持续哭泣，睡眠与情绪需持续关怀')
+    if (mc.sleep_quality === '严重不足') flags.push('产妇睡眠严重不足')
+    if (mc.family_support === '不足') flags.push('家庭支持不足')
   }
   if (['涨奶', '乳头皲裂', '红肿热痛'].includes(v.breast)) {
     raise(1)

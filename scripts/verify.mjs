@@ -106,5 +106,91 @@ ok('护士回复咨询并闭环', reply.consult.status === '已回复')
 const deny = await fetch(`${BASE}/api/dashboard`, { headers: { Authorization: `Bearer ${family.token}` } })
 ok('家属无权访问护士工作台', deny.status === 403)
 
+// ========== 产妇情绪异常关怀 ==========
+// 11 护士关怀中心：紧急自伤（赵敏）+ 家属代述待核实（李婷）
+const care = await call(nurse.token, 'GET', '/api/mood/care')
+const zhao = care.groups.find(g => g.mother_name === '赵敏')
+const li = care.groups.find(g => g.mother_name === '李婷')
+ok('关怀中心聚合', care.groups.length >= 2, care.groups.map(g => `${g.mother_name}${g.hasSelfHarm ? '·自伤' : ''}${g.pendingVerify ? '·待核实' : ''}`).join('、'))
+ok('自伤想法紧急置顶', !!zhao && zhao.hasSelfHarm === true && zhao.records.some(r => r.self_harm === 1 && r.epds_score === 16),
+  zhao ? `EPDS ${zhao.latest.epds_score}` : '未找到赵敏')
+ok('护士可见内部备注', zhao.records.some(r => r.nurse_note && r.nurse_note.includes('EPDS')), 'nurse_note 仅护士可见')
+ok('家属代述待核实', !!li && li.pendingVerify === true && li.records.some(r => r.source === '家属代述' && r.status === '待核实'))
+ok('双来源冲突标记（赵敏：家属说支持充分 vs 产妇说不足）',
+  zhao.records.every(r => r.conflict_with != null) && zhao.records.some(r => r.conflict_note.includes('家属支持评价')))
+
+// 12 工作台情绪统计
+ok('工作台情绪统计', dash.stats.moodSelfHarm >= 1 && dash.stats.moodPendingVerify >= 1,
+  `自伤${dash.stats.moodSelfHarm} 待核实${dash.stats.moodPendingVerify} 进行中${dash.stats.moodActive}`)
+
+// 13 医生视角：临床内容可见、护士内部备注不可见
+const docCare = await call(doctor.token, 'GET', '/api/mood/care')
+const docZhao = docCare.groups.find(g => g.mother_name === '赵敏')
+ok('医生可见 EPDS 临床信息', !!docZhao && docZhao.records.some(r => r.epds_score === 16 && r.self_harm === 1))
+ok('医生不可见护士内部备注', docZhao.records.every(r => !r.nurse_note))
+
+// 14 护士新建情绪关怀记录（核实李婷家属代述）：EPDS 9 分=情绪困扰，自动生成敏感行动
+const famBefore = await call(family.token, 'GET', '/api/family/overview')
+ok('家属代述本人可回看且无分数', famBefore.mood_records.some(r => r.own_report && r.status === '待核实') &&
+  famBefore.mood_records.every(r => r.epds_score == null && r.self_harm === 0))
+const epds = [{ q: 1, a: 1 }, { q: 2, a: 2 }, { q: 3, a: 1 }, { q: 4, a: 1 }, { q: 5, a: 0 },
+  { q: 6, a: 1 }, { q: 7, a: 1 }, { q: 8, a: 1 }, { q: 9, a: 1 }, { q: 10, a: 0 }] // 合计 9 分
+const moodRes = await call(nurse.token, 'POST', '/api/mood/records', {
+  archive_id: liAnan.id, recorded_at: new Date().toISOString().slice(0, 16),
+  epds_detail: epds, crying: true, sleep_quality: '严重不足', family_support: '不足',
+  care_pressure: '新手妈妈夜间独自喂奶，睡眠碎片化', risk_factors: ['照护压力', '睡眠不足', '家庭支持不足'],
+  suggestion: '安排心理咨询，本周两次电话回访', family_notice: '请家人夜间多分担照护、多陪伴妈妈，社区提供免费心理咨询',
+  nurse_note: '验证脚本：仅护士可见备注',
+})
+ok('EPDS 评分与分级', moodRes.mood?.epds_score === 9 && moodRes.grade?.level === '中', `得分 ${moodRes.mood?.epds_score}`)
+ok('敏感随访行动生成', Array.isArray(moodRes.grade?.plans) && moodRes.grade.plans.includes('心理咨询'))
+const liDetail2 = await call(nurse.token, 'GET', `/api/archives/${liAnan.id}`)
+const sensitiveFu = liDetail2.followups.filter(f => f.sensitive === 1)
+ok('情绪行动为敏感事项且含家属温和提醒', sensitiveFu.some(f => f.type === '心理咨询' && f.family_title),
+  sensitiveFu.map(f => f.type).join('、'))
+ok('核实后家属代述并入本轮关怀', liDetail2.mood_records.every(r => r.status !== '待核实'))
+ok('核实产生双来源冲突（支持：一般 vs 不足 / 睡眠：间断 vs 严重不足）',
+  liDetail2.mood_records.some(r => r.conflict_with != null && r.conflict_note.includes('家属支持评价')))
+
+// 15 家属端脱敏：只见温和提醒，不见分数/自伤/临床建议/内部备注
+const famAfter = await call(family.token, 'GET', '/api/family/overview')
+ok('家属端收到情绪关怀温和提醒', famAfter.mood_notices.some(n => n.includes('免费心理咨询')),
+  famAfter.mood_notices.join('；') || '（无）')
+ok('家属端敏感随访仅展示提醒文案',
+  famAfter.followups.every(f => !f.sensitive || (!f.detail && !/EPDS|自伤|评分/.test(f.title))))
+ok('家属端情绪记录无敏感字段',
+  famAfter.mood_records.every(r => (r.epds_score == null) && r.self_harm === 0 && !r.nurse_note && !r.suggestion))
+ok('家属端访视记录已过滤情绪敏感标记',
+  famAfter.visits.every(v => v.flags.every(x => !/EPDS|自伤|情绪(低落|异常|困扰)/.test(x))))
+
+// 16 回访追踪：情绪变化 + 是否接受帮助
+const newMoodId = moodRes.mood.id
+const fuRes = await call(nurse.token, 'POST', `/api/mood/records/${newMoodId}/followup`,
+  { mood_trend: '好转', care_status: '已接受', note: '验证脚本：已报名心理咨询，睡眠改善' })
+ok('回访记录情绪变化与帮助接受', fuRes.mood?.mood_trend === '好转' && fuRes.mood?.care_status === '已接受')
+
+// 17 医生决策情绪处置（心理咨询）→ 敏感事项；结束关怀闭环行动
+const fus2 = await call(doctor.token, 'GET', '/api/followups')
+const moodFu = fus2.followups.find(f => f.archive_id === liAnan.id && f.type === '增加电话回访' && f.status !== '已闭环')
+if (moodFu) {
+  const dec2 = await call(doctor.token, 'POST', `/api/followups/${moodFu.id}/decide`, { decision: '心理咨询', note: '验证脚本：医生安排心理咨询' })
+  ok('医生决策情绪处置', dec2.ok === true)
+} else ok('医生决策情绪处置', false, '缺少开放的情绪事项')
+const closeCare = await call(nurse.token, 'POST', `/api/mood/records/${newMoodId}/close`, { note: '验证脚本：好转结束' })
+ok('结束关怀', closeCare.ok === true)
+
+// 18 家属紧急代述通道（家属勾选自伤担忧）：家属回显无敏感字段，护士端收到紧急信号
+const fam2session = await login('family2', 'family123')
+const urgentReport = await call(fam2session.token, 'POST', '/api/family/mood-report',
+  { crying: true, sleep_quality: '严重不足', family_support: '不足', self_harm_concern: true, care_pressure: '验证脚本：家属非常担心' })
+ok('家属紧急代述提交且回显脱敏', urgentReport.mood?.id && urgentReport.mood.self_harm === 0 && urgentReport.mood.epds_score == null)
+const care2 = await call(nurse.token, 'GET', '/api/mood/care')
+ok('护士端收到自伤紧急信号', care2.groups.some(g => g.mother_name === '王雪' && g.hasSelfHarm === true))
+
+// 19 情绪接口越权拦截
+const denyMood1 = await fetch(`${BASE}/api/mood/care`, { headers: { Authorization: `Bearer ${family.token}` } })
+const denyMood3 = await fetch(`${BASE}/api/family/mood-report`, { method: 'POST', headers: { Authorization: `Bearer ${doctor.token}`, 'Content-Type': 'application/json' }, body: '{}' })
+ok('情绪接口按角色拦截（家属禁读关怀中心/医生禁代述）', denyMood1.status === 403 && denyMood3.status === 403)
+
 console.log(`\n结果: ${passed} 通过, ${failed} 失败`)
 process.exit(failed ? 1 : 0)

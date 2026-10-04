@@ -5,6 +5,8 @@ import { api } from '../../api'
 import type { Archive, ArchiveDetail, VisitPayload } from '../../types'
 import { assessVisit } from '../../risk'
 import { Badge, Empty, RiskBadge, fmtTime, toast } from '../../components/ui'
+import { MoodCareForm } from '../../components/MoodCare'
+import type { MoodCarePayload, MoodRecord } from '../../types'
 import { isOfflineNow, useNet } from '../../store/net'
 import { newClientId, useDrafts } from '../../store/drafts'
 
@@ -19,6 +21,7 @@ export default function VisitForm() {
   const archiveId = Number(sp.get('archiveId'))
   const appointmentId = sp.get('appointmentId') ? Number(sp.get('appointmentId')) : null
   const [archive, setArchive] = useState<Archive | null>(null)
+  const [moodRecords, setMoodRecords] = useState<MoodRecord[]>([])
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
   const nav = useNavigate()
@@ -34,6 +37,7 @@ export default function VisitForm() {
     feeding_type: '', feeding_freq: 8, spit_up: '无', sleep: '正常',
     breast: '正常', mood: '平稳', wound_check: '', care_ability: '',
     device_issue: false, photos: [], advice: '',
+    mood_care: { recorded_at: '', risk_factors: [], followup_plan: [], epds_detail: [] },
   })
   const [adviceTouched, setAdviceTouched] = useState(false)
   const set = (k: keyof VisitPayload, v: any) => setF((s) => ({ ...s, [k]: v }))
@@ -42,10 +46,16 @@ export default function VisitForm() {
     api.get<ArchiveDetail>(`/api/archives/${archiveId}`)
       .then((d) => {
         setArchive(d.archive)
+        setMoodRecords(d.mood_records || [])
         setF((s) => ({ ...s, feeding_type: s.feeding_type || d.archive.feeding_type, wound_check: s.wound_check || d.archive.maternal_wound, care_ability: s.care_ability || d.archive.care_ability }))
       })
       .catch((e) => setErr(`档案加载失败：${e.message}（离线状态下请回到社区网络环境再打开本页，或先在同步页处理草稿）`))
   }, [archiveId])
+
+  // 情绪关怀采集时间默认跟随访视时间
+  useEffect(() => {
+    setF((s) => ({ ...s, mood_care: { ...(s.mood_care || {}), recorded_at: f.visit_time } }))
+  }, [f.visit_time])
 
   // 实时风险预评估（与服务端同一套规则）
   const assess = useMemo(() => (archive ? assessVisit(archive, f) : null), [archive, f])
@@ -228,6 +238,15 @@ export default function VisitForm() {
           <label>家庭照护能力（现场评估）</label>
           <Seg options={['良好', '一般', '薄弱']} value={f.care_ability!} onChange={(v) => set('care_ability', v)} />
         </div>
+      </div>
+
+      <div className="card mood-card">
+        <div className="card-title"><span className="dot" style={{ background: 'var(--red)' }} />产妇情绪异常关怀</div>
+        <MoodCareForm
+          value={f.mood_care || { risk_factors: [], followup_plan: [], epds_detail: [] }}
+          onChange={(mc) => set('mood_care', mc)}
+          pendingReports={moodRecords.filter((r) => r.status === '待核实')}
+        />
       </div>
 
       <div className="card">

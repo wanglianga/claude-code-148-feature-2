@@ -37,6 +37,20 @@ export default function FamilyHome() {
         <div className="alert-box info">📅 下次上门访视：{fmtTime(d.nextAppointment.scheduled_time)}（{d.nextAppointment.type}）</div>
       )}
 
+      {d.mood_notices && d.mood_notices.length > 0 && (
+        <Link to="/family/mood" className="card" style={{ display: 'block', borderColor: '#f3d9ae' }}>
+          <div className="card-title" style={{ margin: 0 }}><span className="dot" style={{ background: 'var(--red)' }} />妈妈情绪关怀提醒</div>
+          {d.mood_notices.slice(0, 2).map((n, i) => <div key={i} className="small mt8">💗 {n}</div>)}
+          <div className="small muted mt8">点击查看详情或代述妈妈近况 →</div>
+        </Link>
+      )}
+      {(!d.mood_notices || d.mood_notices.length === 0) && (d.mood_records || []).some((r) => r.own_report && r.status === '待核实') && (
+        <Link to="/family/mood" className="card" style={{ display: 'block' }}>
+          <div className="card-title" style={{ margin: 0 }}><span className="dot" style={{ background: 'var(--amber)' }} />妈妈情绪关怀</div>
+          <div className="small mt8">您反馈的观察待护士上门核实，护士会结合妈妈当面表述跟进 💗</div>
+        </Link>
+      )}
+
       {last && (
         <div className="card">
           <div className="row between mb8">

@@ -74,4 +74,5 @@ export const APPT_STATUS_COLOR: Record<string, string> = {
 }
 export const FOLLOWUP_TYPE_COLOR: Record<string, string> = {
   复查: 'coral', 转诊: 'red', 母乳指导: 'teal', 电话随访: 'amber', 线上咨询: 'teal', 再次预约: 'amber',
+  心理咨询: 'red', 增加电话回访: 'amber', 转妇保门诊: 'red', 情绪关怀: 'coral', 电话回访: 'amber',
 }

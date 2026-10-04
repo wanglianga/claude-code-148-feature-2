@@ -157,3 +157,10 @@ button { font-family: inherit; }
 
 .section-gap { height: 4px; }
 .advice-pre { white-space: pre-wrap; font-size: 13.5px; background: #fffaf5; border: 1px dashed #eccfae; border-radius: 10px; padding: 10px 12px; }
+
+/* —— 产妇情绪异常关怀 —— */
+.mood-care .epds-item { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; background: #fffdfb; }
+.mood-card { border-color: #f3d9ae; }
+.cmp-table { width: 100%; border-collapse: collapse; font-size: 12.5px; min-width: 480px; }
+.cmp-table th, .cmp-table td { border: 1px solid var(--line); padding: 7px 8px; text-align: center; }
+.cmp-table th { background: #f5eee9; font-weight: 600; }
