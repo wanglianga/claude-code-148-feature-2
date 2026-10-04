@@ -147,12 +147,59 @@ CREATE TABLE IF NOT EXISTS sessions (
   created_at TEXT DEFAULT (datetime('now','localtime'))
 );
 
+-- 产妇情绪关怀（敏感）：量表、家属支持、自伤想法、风险来源；双来源（护士访视·产妇自述 / 家属代填）
+CREATE TABLE IF NOT EXISTS mood_cares (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  archive_id INTEGER NOT NULL REFERENCES archives(id),
+  visit_id INTEGER REFERENCES visits(id),
+  source TEXT NOT NULL,                -- nurse_visit(护士访视·产妇自述) / family_report(家属代填)
+  persistent_crying TEXT DEFAULT '无',  -- 持续哭泣 无/偶尔/持续
+  sleep_quality TEXT DEFAULT '正常',    -- 睡眠 正常/入睡困难/易醒/严重失眠
+  epds_score INTEGER,                  -- 爱丁堡产后抑郁量表 0~30（敏感，家属代填为空）
+  family_support TEXT DEFAULT '',       -- 家属支持 良好/一般/不足（护士评估）
+  care_hands TEXT DEFAULT '',           -- 照护人手 充足/紧张/不足（家属代填）
+  self_harm TEXT DEFAULT '无',          -- 自伤想法 无/偶有/持续（高敏感）
+  risk_factors TEXT DEFAULT '[]',       -- JSON 风险来源 [照护压力/睡眠不足/家庭支持不足]
+  mood_text TEXT DEFAULT '',            -- 家属代填的情绪描述 平稳/烦躁/低落/经常哭泣
+  advice TEXT DEFAULT '',               -- 关怀建议（敏感）
+  note TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT '关怀中', -- 关怀中/已闭环
+  created_by TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime')),
+  closed_at TEXT,
+  closed_by TEXT,
+  close_note TEXT DEFAULT ''
+);
+
+-- 情绪关怀过程记录：社区安排（心理咨询/增加电话回访/转妇保门诊）与回访追踪（情绪变化/是否接受帮助）
+CREATE TABLE IF NOT EXISTS mood_care_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  care_id INTEGER NOT NULL REFERENCES mood_cares(id),
+  kind TEXT NOT NULL,            -- 安排 / 回访
+  action TEXT DEFAULT '',        -- 心理咨询/增加电话回访/转妇保门诊（kind=安排）
+  mood_change TEXT DEFAULT '',   -- 情绪变化 好转/平稳/加重（kind=回访）
+  help_accepted TEXT DEFAULT '', -- 是否接受帮助 已接受/部分接受/未接受（kind=回访）
+  note TEXT DEFAULT '',
+  created_by TEXT DEFAULT '',
+  created_at TEXT DEFAULT (datetime('now','localtime'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_appt_archive ON appointments(archive_id);
 CREATE INDEX IF NOT EXISTS idx_appt_status ON appointments(status);
 CREATE INDEX IF NOT EXISTS idx_visit_archive ON visits(archive_id);
 CREATE INDEX IF NOT EXISTS idx_followup_status ON followups(status);
 CREATE INDEX IF NOT EXISTS idx_events_archive ON events(archive_id);
+CREATE INDEX IF NOT EXISTS idx_moodcare_archive ON mood_cares(archive_id);
+CREATE INDEX IF NOT EXISTS idx_moodcarelog_care ON mood_care_logs(care_id);
 `)
+
+// 轻量迁移：旧库补充 followups.sensitive（敏感随访事项，家属端不可见）
+{
+  const cols = db.prepare(`PRAGMA table_info(followups)`).all().map((c) => c.name)
+  if (!cols.includes('sensitive')) {
+    db.exec(`ALTER TABLE followups ADD COLUMN sensitive INTEGER DEFAULT 0`)
+  }
+}
 
 export function addEvent(archiveId, kind, title, detail = '', actor = '') {
   db.prepare('INSERT INTO events (archive_id, kind, title, detail, actor) VALUES (?,?,?,?,?)')

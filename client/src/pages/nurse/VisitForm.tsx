@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { api } from '../../api'
-import type { Archive, ArchiveDetail, VisitPayload } from '../../types'
+import type { Archive, ArchiveDetail, MoodCarePayload, VisitPayload } from '../../types'
 import { assessVisit } from '../../risk'
 import { Badge, Empty, RiskBadge, fmtTime, toast } from '../../components/ui'
 import { isOfflineNow, useNet } from '../../store/net'
@@ -38,6 +38,31 @@ export default function VisitForm() {
   const [adviceTouched, setAdviceTouched] = useState(false)
   const set = (k: keyof VisitPayload, v: any) => setF((s) => ({ ...s, [k]: v }))
 
+  // 产妇情绪关怀（敏感）：量表、家属支持、自伤想法、风险来源、建议
+  const [mcOn, setMcOn] = useState(false)
+  const [mc, setMc] = useState<MoodCarePayload>({
+    persistent_crying: '无', sleep_quality: '正常', epds_score: null,
+    family_support: '良好', self_harm: '无', risk_factors: [], advice: '',
+  })
+  const setMcF = (k: keyof MoodCarePayload, v: any) => setMc((s) => ({ ...s, [k]: v }))
+  const toggleFactor = (x: string) =>
+    setMcF('risk_factors', (mc.risk_factors || []).includes(x)
+      ? (mc.risk_factors || []).filter((f) => f !== x)
+      : [...(mc.risk_factors || []), x])
+  // 情绪选“低落/异常”时自动展开情绪关怀区
+  useEffect(() => { if (['低落', '异常'].includes(f.mood || '')) setMcOn(true) }, [f.mood])
+  // 按已填内容自动提示风险来源（可手动增删）
+  useEffect(() => {
+    if (!mcOn) return
+    setMc((s) => {
+      const auto = new Set(s.risk_factors || [])
+      if (s.persistent_crying && s.persistent_crying !== '无') auto.add('照护压力')
+      if (s.sleep_quality && s.sleep_quality !== '正常') auto.add('睡眠不足')
+      if (s.family_support === '不足') auto.add('家庭支持不足')
+      return { ...s, risk_factors: [...auto] }
+    })
+  }, [mcOn, mc.persistent_crying, mc.sleep_quality, mc.family_support])
+
   useEffect(() => {
     api.get<ArchiveDetail>(`/api/archives/${archiveId}`)
       .then((d) => {
@@ -47,8 +72,9 @@ export default function VisitForm() {
       .catch((e) => setErr(`档案加载失败：${e.message}（离线状态下请回到社区网络环境再打开本页，或先在同步页处理草稿）`))
   }, [archiveId])
 
-  // 实时风险预评估（与服务端同一套规则）
-  const assess = useMemo(() => (archive ? assessVisit(archive, f) : null), [archive, f])
+  // 实时风险预评估（与服务端同一套规则，含情绪关怀敏感项）
+  const moodCarePayload = mcOn ? { ...mc, epds_score: mc.epds_score == null || (mc.epds_score as any) === '' ? null : Number(mc.epds_score) } : undefined
+  const assess = useMemo(() => (archive ? assessVisit(archive, { ...f, mood_care: moodCarePayload }) : null), [archive, f, mcOn, mc])
   const advice = adviceTouched ? f.advice || '' : assess?.advice || ''
 
   if (err) return <div className="alert-box danger">{err}</div>
@@ -65,6 +91,7 @@ export default function VisitForm() {
       stool_count: Number(f.stool_count || 0),
       urine_count: Number(f.urine_count || 0),
       feeding_freq: Number(f.feeding_freq || 0),
+      ...(moodCarePayload ? { mood_care: moodCarePayload } : {}),
     }
   }
 
@@ -228,6 +255,69 @@ export default function VisitForm() {
           <label>家庭照护能力（现场评估）</label>
           <Seg options={['良好', '一般', '薄弱']} value={f.care_ability!} onChange={(v) => set('care_ability', v)} />
         </div>
+      </div>
+
+      <div className="card">
+        <div className="row between">
+          <div className="card-title" style={{ margin: 0 }}><span className="dot" style={{ background: 'var(--red)' }} />产妇情绪关怀（敏感）</div>
+          <label className="row small" style={{ gap: 6, cursor: 'pointer', margin: 0 }}>
+            <input type="checkbox" checked={mcOn} onChange={(e) => setMcOn(e.target.checked)} style={{ width: 'auto' }} />
+            记录
+          </label>
+        </div>
+        {!mcOn && <div className="small muted mt8">产妇表达持续哭泣、睡眠差等情况时开启记录；内容仅护士与社区医生可见，家属端不展示。</div>}
+        {mcOn && (
+          <div className="mt8">
+            <div className="alert-box danger" style={{ marginBottom: 10 }}>
+              🔒 敏感记录：量表分、自伤想法与风险来源仅护士/社区医生可见，家属端只下发必要提醒。
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <label>持续哭泣</label>
+                <Seg options={['无', '偶尔', '持续']} value={mc.persistent_crying!} onChange={(v) => setMcF('persistent_crying', v)} />
+              </div>
+              <div className="field">
+                <label>睡眠情况</label>
+                <Seg options={['正常', '入睡困难', '易醒', '严重失眠']} value={mc.sleep_quality!} onChange={(v) => setMcF('sleep_quality', v)} />
+              </div>
+            </div>
+            <div className="grid2">
+              <div className="field">
+                <label>EPDS 爱丁堡量表分（0~30，未评留空）</label>
+                <input type="number" inputMode="numeric" min={0} max={30} placeholder="如 13"
+                  value={mc.epds_score ?? ''} onChange={(e) => setMcF('epds_score', e.target.value === '' ? null : Number(e.target.value))} />
+                <div className="hint">≥10 需关注，≥13 提示抑郁风险</div>
+              </div>
+              <div className="field">
+                <label>家属支持</label>
+                <Seg options={['良好', '一般', '不足']} value={mc.family_support!} onChange={(v) => setMcF('family_support', v)} />
+              </div>
+            </div>
+            <div className="field">
+              <label>自伤想法（高敏感）</label>
+              <Seg options={['无', '偶有', '持续']} value={mc.self_harm!} onChange={(v) => setMcF('self_harm', v)} />
+              {mc.self_harm !== '无' && (
+                <div className="hint" style={{ color: 'var(--red)' }}>
+                  ⚠ 存在自伤想法：请当面评估安全，必要时立即联系妇保门诊/心理危机干预；提交后系统自动安排心理咨询与转妇保门诊。
+                </div>
+              )}
+            </div>
+            <div className="field">
+              <label>风险来源（供心理咨询/妇保门诊研判）</label>
+              <div className="seg">
+                {['照护压力', '睡眠不足', '家庭支持不足'].map((x) => (
+                  <span key={x} className={`opt ${(mc.risk_factors || []).includes(x) ? 'on' : ''}`} onClick={() => toggleFactor(x)}>{x}</span>
+                ))}
+              </div>
+              <div className="hint">按填写内容自动提示，可手动增删</div>
+            </div>
+            <div className="field" style={{ marginBottom: 0 }}>
+              <label>关怀建议（敏感，仅医护可见）</label>
+              <textarea rows={3} value={mc.advice || ''} onChange={(e) => setMcF('advice', e.target.value)}
+                placeholder="如：建议家属分担夜间照护，安排心理咨询并增加电话回访" />
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="card">

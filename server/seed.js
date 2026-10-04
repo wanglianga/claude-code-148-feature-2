@@ -3,6 +3,7 @@
 import { createHash } from 'node:crypto'
 import db, { addEvent } from './db.js'
 import { createVisit } from './service.js'
+import { createMoodCare, addTrack } from './moodcare.js'
 
 const hash = (s) => createHash('sha256').update('nbv:' + s).digest('hex')
 const day = 86400000
@@ -41,9 +42,9 @@ export function seed() {
   // 3 陈静/陈小米：已访视正常，闭环样例
   const a3 = arch(null, '陈静', '陈小米', '女', -13, 3500, '顺产', '配方奶喂养', '低', '会阴切口愈合良好',
     '朝阳社区 12 栋 601', '陈静', '13900000003', -11, '良好', '')
-  // 4 赵敏/赵豆豆：低体重儿，体重下降+喂养不足+产妇情绪低落
+  // 4 赵敏/赵豆豆：低体重儿，体重下降+喂养不足+产妇情绪低落（持续哭泣、睡眠差 → 情绪关怀建档）
   const a4 = arch(null, '赵敏', '赵豆豆', '男', -6, 2500, '顺产', '母乳喂养', '高', '会阴切口愈合良好',
-    '幸福里小区 5 栋 3 单元 202', '赵敏丈夫', '13900000004', -4, '薄弱', '低出生体重儿，产妇自述休息差')
+    '幸福里小区 5 栋 3 单元 202', '赵敏丈夫', '13900000004', -4, '薄弱', '低出生体重儿，产妇自述休息差、常独自哭泣')
   // 5 孙丽/孙果果：昨日上门家属未开门，今日再约
   const a5 = arch(null, '孙丽', '孙果果', '女', -7, 3100, '顺产', '母乳喂养', '中', '会阴切口愈合良好',
     '滨河小区 9 栋 2 单元 1101', '孙丽婆婆', '13900000005', -5, '一般', '电话联系家属称白天常不在家')
@@ -79,9 +80,17 @@ export function seed() {
     bilirubin: 128, bilirubin_site: '额头', cord: '干燥', stool_count: 3, stool_color: '黄色', urine_count: 7,
     feeding_freq: 8, spit_up: '无', sleep: '正常', breast: '正常', mood: '平稳', care_ability: '良好' }, nurseRow)
 
-  createVisit({ appointment_id: appt4, archive_id: a4, visit_time: iso(-1, '09:20'), weight: 2320,
+  const v4 = createVisit({ appointment_id: appt4, archive_id: a4, visit_time: iso(-1, '09:20'), weight: 2320,
     bilirubin: 176, bilirubin_site: '胸口', cord: '结痂', stool_count: 2, stool_color: '黄绿色', urine_count: 5,
-    feeding_freq: 6, spit_up: '偶尔', sleep: '易惊', breast: '涨奶', mood: '低落', care_ability: '薄弱' }, nurseRow)
+    feeding_freq: 6, spit_up: '偶尔', sleep: '易惊', breast: '涨奶', mood: '低落', care_ability: '薄弱',
+    mood_care: { persistent_crying: '持续', sleep_quality: '严重失眠', epds_score: 14, family_support: '不足',
+      self_harm: '无', risk_factors: ['睡眠不足', '家庭支持不足'],
+      advice: '产妇持续哭泣、严重失眠，EPDS 14 分提示抑郁风险。建议家属分担夜间照护，已安排心理咨询并增加电话回访。' } }, nurseRow)
+  // 回访追踪：情绪变化 + 是否接受帮助
+  if (v4.moodCare) {
+    addTrack(v4.moodCare.id, { mood_change: '平稳', help_accepted: '部分接受',
+      note: '电话回访：产妇情绪仍偏低落但哭泣减少，已同意下周心理咨询，婆婆开始夜间搭手。' }, nurseRow)
+  }
 
   createVisit({ appointment_id: appt6, archive_id: a6, visit_time: iso(-5, '14:20'), weight: 3250,
     bilirubin: 152, bilirubin_site: '额头', cord: '已脱落', stool_count: 4, stool_color: '黄色', urine_count: 8,
@@ -92,9 +101,18 @@ export function seed() {
     feeding_freq: 7, spit_up: '频繁', sleep: '嗜睡', breast: '乳头皲裂', mood: '焦虑', care_ability: '一般',
     device_issue: 1 }, nurseRow)
 
-  createVisit({ appointment_id: appt2, archive_id: a2, visit_time: iso(-2, '09:40'), weight: 2700,
+  const v2 = createVisit({ appointment_id: appt2, archive_id: a2, visit_time: iso(-2, '09:40'), weight: 2700,
     bilirubin: 262, bilirubin_site: '额头', cord: '干燥', stool_count: 3, stool_color: '黄色', urine_count: 6,
-    feeding_freq: 8, spit_up: '偶尔', sleep: '正常', breast: '正常', mood: '平稳', care_ability: '一般' }, nurseRow)
+    feeding_freq: 8, spit_up: '偶尔', sleep: '正常', breast: '正常', mood: '焦虑', care_ability: '一般',
+    mood_care: { persistent_crying: '偶尔', sleep_quality: '入睡困难', epds_score: 11, family_support: '一般',
+      self_harm: '无', risk_factors: ['睡眠不足'],
+      advice: '产妇自述入睡困难、偶有哭泣，EPDS 11 分需关注。建议家人多陪伴分担，社区将增加电话回访。' } }, nurseRow)
+
+  // 家属代填（family2/王雪家）：与产妇自述冲突的演示 —— 家属称“都挺好”，
+  // 但护士访视记录为偶尔哭泣+入睡困难，双来源与采集时间并列保留，供心理咨询/妇保门诊研判
+  const fam2Row = db.prepare('SELECT * FROM users WHERE id=?').get(fam2)
+  createMoodCare({ archive_id: a2, mood_text: '平稳', sleep_quality: '正常', care_hands: '充足',
+    note: '家里都挺好的，妈妈睡得也行，不用社区操心。' }, fam2Row, { source: 'family_report' })
 
   // —— 未开门事件 + 再次预约事项 ——
   addEvent(a5, '未开门', '上门访视家属未开门', '敲门无人应答，电话未接通，已留联系卡', '王芳')

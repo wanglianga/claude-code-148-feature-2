@@ -37,6 +37,13 @@ export default function FamilyHome() {
         <div className="alert-box info">📅 下次上门访视：{fmtTime(d.nextAppointment.scheduled_time)}（{d.nextAppointment.type}）</div>
       )}
 
+      {d.moodCare?.active && (
+        <div className="alert-box info">
+          <b>🌿 情绪关怀提醒：</b>{d.moodCare.reminder}
+          <div className="mt8"><Link to="/family/mood" className="btn teal sm">去填写妈妈近况</Link></div>
+        </div>
+      )}
+
       {last && (
         <div className="card">
           <div className="row between mb8">

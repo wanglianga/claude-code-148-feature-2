@@ -106,5 +106,64 @@ ok('护士回复咨询并闭环', reply.consult.status === '已回复')
 const deny = await fetch(`${BASE}/api/dashboard`, { headers: { Authorization: `Bearer ${family.token}` } })
 ok('家属无权访问护士工作台', deny.status === 403)
 
+// 11 产妇情绪关怀：访视中建档（量表/家属支持/自伤想法/建议）
+const mcVisit = await call(nurse.token, 'POST', '/api/visits', {
+  archive_id: liAnan.id, visit_time: new Date().toISOString().slice(0, 16),
+  weight: 2950, bilirubin: 150, feeding_freq: 8, stool_count: 3, stool_color: '黄色', urine_count: 7,
+  mood: '低落',
+  mood_care: {
+    persistent_crying: '持续', sleep_quality: '严重失眠', epds_score: 15,
+    family_support: '不足', self_harm: '偶有', risk_factors: ['睡眠不足', '家庭支持不足'],
+    advice: '建议家属分担夜间照护，安排心理咨询并增加电话回访。',
+  },
+})
+const flagText = Array.isArray(mcVisit.visit?.flags) ? mcVisit.visit.flags.join('') : String(mcVisit.visit?.flags || '')
+ok('情绪关怀随访视建档', !!mcVisit.moodCare?.id, `care#${mcVisit.moodCare?.id}`)
+ok('敏感明细不进家属可见标记（无自伤/量表字样）', !flagText.includes('自伤') && !flagText.includes('EPDS') && flagText.includes('情绪关怀'))
+ok('自伤想法提升风险等级', ['高', '危急'].includes(mcVisit.visit.risk_level), `风险${mcVisit.visit.risk_level}`)
+const careId = mcVisit.moodCare.id
+
+// 12 护士/医生可见敏感全量，家属无权访问
+const mcList = await call(nurse.token, 'GET', `/api/mood-cares?archive_id=${liAnan.id}`)
+const nurseCare = mcList.cares.find((c) => c.id === careId)
+ok('护士端可见敏感全量（量表/自伤/风险来源）',
+  nurseCare?.epds_score === 15 && nurseCare?.self_harm === '偶有' && nurseCare?.risk_factors?.includes('睡眠不足'))
+ok('自动安排心理咨询+增加电话回访', nurseCare?.logs?.some((l) => l.kind === '安排' && l.action === '心理咨询') && nurseCare?.logs?.some((l) => l.action === '增加电话回访'))
+const mcDoc = await call(doctor.token, 'GET', `/api/mood-cares?archive_id=${liAnan.id}`)
+ok('社区医生可见敏感全量', mcDoc.cares.some((c) => c.id === careId && c.self_harm === '偶有'))
+const denyMc = await fetch(`${BASE}/api/mood-cares?archive_id=${liAnan.id}`, { headers: { Authorization: `Bearer ${family.token}` } })
+ok('家属无权访问情绪关怀记录', denyMc.status === 403)
+
+// 13 家属端脱敏：只收必要提醒，敏感内容与敏感事项不下发
+const famOv = await call(family.token, 'GET', '/api/family/overview')
+const famStr = JSON.stringify(famOv)
+ok('家属端不含敏感明细（自伤/量表/风险来源）',
+  !famStr.includes('自伤') && !famStr.includes('EPDS') && !famStr.includes('epds_score') && !famStr.includes('家庭支持不足'))
+ok('家属端收到必要提醒', famOv.moodCare?.active === true && (famOv.moodCare.reminder || '').length > 0, famOv.moodCare?.actions?.join('、'))
+ok('敏感随访事项不下发家属端', !famOv.followups.some((f) => ['心理咨询', '转妇保门诊'].includes(f.type)))
+
+// 14 家属代填 → 双来源并列 + 冲突检测（含采集时间）
+await call(family.token, 'POST', '/api/mood-cares/family-report', { mood_text: '平稳', sleep_quality: '正常', care_hands: '充足', note: '验证脚本：家里都挺好' })
+const mcAfter = await call(nurse.token, 'GET', `/api/mood-cares?archive_id=${liAnan.id}`)
+ok('家属代填与产妇自述双来源并列保留',
+  mcAfter.cares.some((c) => c.source === 'family_report') && mcAfter.cares.some((c) => c.source === 'nurse_visit'))
+ok('双来源冲突检测（含双方采集时间）',
+  mcAfter.conflicts.length >= 2 && mcAfter.conflicts.every((c) => c.nurseTime && c.familyTime),
+  mcAfter.conflicts.map((c) => c.dimension).join('、'))
+ok('风险来源标注（照护压力/睡眠不足/家庭支持不足）',
+  mcAfter.riskSources.includes('睡眠不足') && mcAfter.riskSources.includes('家庭支持不足'), mcAfter.riskSources.join('、'))
+
+// 15 社区安排 → 回访追踪 → 闭环（闭环后家属端仍脱敏）
+const act = await call(doctor.token, 'POST', `/api/mood-cares/${careId}/actions`, { actions: ['转妇保门诊'], note: '验证脚本：转妇保门诊' })
+ok('社区安排转妇保门诊', act.ok === true)
+const mcArr = await call(nurse.token, 'GET', `/api/mood-cares?archive_id=${liAnan.id}`)
+ok('安排写入关怀日志', mcArr.cares.find((c) => c.id === careId)?.logs?.some((l) => l.action === '转妇保门诊'))
+const trk = await call(nurse.token, 'POST', `/api/mood-cares/${careId}/tracks`, { mood_change: '好转', help_accepted: '已接受', note: '验证脚本：电话回访情绪好转' })
+ok('回访追踪（情绪变化+是否接受帮助）', trk.ok === true)
+const cls = await call(doctor.token, 'POST', `/api/mood-cares/${careId}/close`, { note: '验证脚本：情绪好转，已接受心理咨询' })
+ok('情绪关怀闭环', cls.care?.status === '已闭环')
+const famOv2 = await call(family.token, 'GET', '/api/family/overview')
+ok('闭环后家属端仍脱敏', !JSON.stringify(famOv2).includes('自伤') && !JSON.stringify(famOv2).includes('epds_score'))
+
 console.log(`\n结果: ${passed} 通过, ${failed} 失败`)
 process.exit(failed ? 1 : 0)

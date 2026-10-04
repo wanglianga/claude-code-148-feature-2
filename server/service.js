@@ -1,6 +1,7 @@
 // 访视落库与随访闭环的领域服务：种子数据与 HTTP 路由共用，保证行为一致
 import db, { addEvent } from './db.js'
 import { assessVisit } from './risk.js'
+import { createMoodCare } from './moodcare.js'
 
 const VISIT_COLS = ['client_id','appointment_id','archive_id','nurse_id','visit_time','weight','bilirubin',
   'bilirubin_site','cord','stool_count','stool_color','urine_count','feeding_type','feeding_freq','spit_up',
@@ -19,7 +20,8 @@ export function closeFollowup(id, closedBy, note = '') {
   if (f.status !== '已闭环') {
     db.prepare(`UPDATE followups SET status='已闭环', closed_at=datetime('now','localtime'),
                 closed_by=?, close_note=? WHERE id=?`).run(closedBy, note, id)
-    addEvent(f.archive_id, '闭环', `【${f.type}】${f.title} 已闭环`, note, closedBy)
+    // 敏感事项（情绪关怀类）的闭环事件同样按敏感处理，家属端时间线不可见
+    addEvent(f.archive_id, f.sensitive ? '情绪回访' : '闭环', `【${f.type}】${f.title} 已闭环`, note, closedBy)
   }
   return db.prepare('SELECT * FROM followups WHERE id=?').get(id)
 }
@@ -56,7 +58,7 @@ export function createVisit(payload, nurse) {
     photos: JSON.stringify(payload.photos || []),
     created_offline: payload.created_offline ? 1 : 0,
   }
-  const r = assessVisit(archive, v)
+  const r = assessVisit(archive, { ...v, mood_care: payload.mood_care })
   v.risk_level = r.riskLevel
   v.flags = JSON.stringify(r.flags)
   v.need_recheck = r.needRecheck; v.need_referral = r.needReferral
@@ -68,6 +70,14 @@ export function createVisit(payload, nurse) {
   const info = db.prepare(`INSERT INTO visits (${cols}) VALUES (${marks})`)
     .run(...VISIT_COLS.map(c => v[c]))
   const visitId = info.lastInsertRowid
+
+  // 产妇情绪关怀（敏感）：随访视一并建档，自动按风险安排社区关怀措施
+  let moodCare = null
+  if (payload.mood_care && typeof payload.mood_care === 'object') {
+    const mc = createMoodCare({ ...payload.mood_care, archive_id: archive.id }, nurse,
+      { source: 'nurse_visit', visitId })
+    moodCare = mc.care
+  }
 
   // 预约状态联动
   if (v.appointment_id) {
@@ -97,13 +107,14 @@ export function createVisit(payload, nurse) {
       .run(archive.id, v.nurse_id, '复查', `${due} 09:00:00`)
   }
   if (v.need_lactation) openFollowup(archive.id, '母乳指导', '安排母乳喂养指导', summary, null, visitId, nurseName)
-  if (v.need_phone) openFollowup(archive.id, '电话随访', '电话随访（产妇情绪/家庭照护）', summary, null, visitId, nurseName)
+  // 情绪关怀已建档时，电话回访由情绪关怀模块按敏感信息处理，不再生成普通电话随访
+  if (v.need_phone && !moodCare) openFollowup(archive.id, '电话随访', '电话随访（产妇情绪/家庭照护）', summary, null, visitId, nurseName)
 
   addEvent(archive.id, '访视', `完成访视（风险：${v.risk_level}）`,
     summary + (v.device_issue ? '。【设备故障，手工记录】' : '') + (v.created_offline ? '。【离线草稿补录同步】' : ''),
     nurseName)
 
-  return { visit: db.prepare('SELECT * FROM visits WHERE id=?').get(visitId), duplicated: false, assessment: r }
+  return { visit: db.prepare('SELECT * FROM visits WHERE id=?').get(visitId), duplicated: false, assessment: r, moodCare }
 }
 
 function num(x) { return x === undefined || x === null || x === '' ? null : Number(x) }

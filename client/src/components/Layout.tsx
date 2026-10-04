@@ -20,6 +20,7 @@ const NAVS: Record<string, { to: string; ico: string; label: string }[]> = {
   family: [
     { to: '/family', ico: '🏠', label: '首页' },
     { to: '/family/visits', ico: '📋', label: '访视建议' },
+    { to: '/family/mood', ico: '🌿', label: '情绪关怀' },
     { to: '/family/docs', ico: '📎', label: '材料' },
     { to: '/family/consult', ico: '💬', label: '咨询改约' },
   ],

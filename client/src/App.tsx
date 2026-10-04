@@ -13,6 +13,7 @@ import FamilyHome from './pages/family/FamilyHome'
 import FamilyVisits from './pages/family/FamilyVisits'
 import FamilyDocs from './pages/family/FamilyDocs'
 import FamilyConsult from './pages/family/FamilyConsult'
+import FamilyMood from './pages/family/FamilyMood'
 
 function homeOf(role?: string) {
   if (role === 'nurse') return '/nurse'
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="/family/visits" element={<FamilyVisits />} />
         <Route path="/family/docs" element={<FamilyDocs />} />
         <Route path="/family/consult" element={<FamilyConsult />} />
+        <Route path="/family/mood" element={<FamilyMood />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

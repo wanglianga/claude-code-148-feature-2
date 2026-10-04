@@ -5,8 +5,9 @@ import { api } from '../../api'
 import type { ArchiveDetail as Detail, Followup, Visit } from '../../types'
 import { AgeText, APPT_STATUS_COLOR, Badge, Empty, FOLLOWUP_TYPE_COLOR, Modal, RiskBadge, fmtTime, toast } from '../../components/ui'
 import { useAuth } from '../../store/auth'
+import MoodCareTab from './MoodCareTab'
 
-const TABS = ['概览', '访视记录', '复查转诊', '材料咨询', '时间线']
+const TABS = ['概览', '访视记录', '情绪关怀', '复查转诊', '材料咨询', '时间线']
 
 export default function ArchiveDetail() {
   const { id } = useParams()
@@ -48,11 +49,14 @@ export default function ArchiveDetail() {
       )}
 
       <div className="tabs">
-        {TABS.map((t) => <div key={t} className={`tab ${tab === t ? 'on' : ''}`} onClick={() => setTab(t)}>{t}</div>)}
+        {TABS.filter((t) => t !== '情绪关怀' || user?.role !== 'family').map((t) => (
+          <div key={t} className={`tab ${tab === t ? 'on' : ''}`} onClick={() => setTab(t)}>{t}</div>
+        ))}
       </div>
 
       {tab === '概览' && <OverviewTab d={data} />}
       {tab === '访视记录' && <VisitsTab visits={data.visits} />}
+      {tab === '情绪关怀' && <MoodCareTab d={data} onChanged={load} />}
       {tab === '复查转诊' && <FollowupsTab followups={data.followups} onChanged={load} />}
       {tab === '材料咨询' && <DocsConsultsTab d={data} onChanged={load} />}
       {tab === '时间线' && (
@@ -172,7 +176,10 @@ export function FollowupsTab({ followups, onChanged, doctor }: { followups: Foll
         <div key={f.id} className="card">
           <div className="row between">
             <span className="strong">【{f.type}】{f.title}</span>
-            <Badge color={f.status === '已闭环' ? 'green' : FOLLOWUP_TYPE_COLOR[f.type] || 'amber'}>{f.status}</Badge>
+            <div className="row">
+              {f.sensitive ? <Badge color="red">🔒敏感</Badge> : null}
+              <Badge color={f.status === '已闭环' ? 'green' : FOLLOWUP_TYPE_COLOR[f.type] || 'amber'}>{f.status}</Badge>
+            </div>
           </div>
           {f.detail && <div className="small muted mt8">{f.detail}</div>}
           <div className="small muted" style={{ marginTop: 4 }}>
@@ -230,10 +237,13 @@ function DecideModal({ f, onClose, onDone }: { f: Followup; onClose: () => void;
       <div className="field">
         <label>处置决定</label>
         <div className="seg">
-          {['复查', '转诊', '电话随访', '母乳指导', '继续观察'].map((d) => (
+          {['复查', '转诊', '电话随访', '母乳指导', '心理咨询', '转妇保门诊', '继续观察'].map((d) => (
             <span key={d} className={`opt ${decision === d ? 'on' : ''}`} onClick={() => setDecision(d)}>{d}</span>
           ))}
         </div>
+        {['心理咨询', '转妇保门诊'].includes(decision) && (
+          <div className="hint" style={{ color: 'var(--red)' }}>该决策将生成敏感随访事项，家属端仅见必要提醒</div>
+        )}
       </div>
       {decision === '复查' && (
         <div className="field">

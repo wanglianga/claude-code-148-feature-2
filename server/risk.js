@@ -138,6 +138,23 @@ export function assessVisit(archive, v) {
     advice.push(`伤口${v.wound_check}，建议社区医生复诊或转妇科。`)
   }
 
+  // —— 产妇情绪关怀（敏感：量表/自伤想法明细只进情绪关怀记录，不进家属可见的 flags/advice） ——
+  const mc = v.mood_care
+  let mcSev = 0
+  if (mc) {
+    if (mc.self_harm === '持续') mcSev = 3
+    else if (mc.self_harm === '偶有') mcSev = 2
+    const epds = mc.epds_score == null || mc.epds_score === '' ? 0 : Number(mc.epds_score)
+    if (epds >= 13) mcSev = Math.max(mcSev, 2)
+    else if (epds >= 10) mcSev = Math.max(mcSev, 1)
+    if (mc.persistent_crying === '持续' || mc.sleep_quality === '严重失眠') mcSev = Math.max(mcSev, 1)
+    if (mcSev > 0) {
+      raise(mcSev)
+      flags.push('产妇情绪关怀已建档（量表与敏感内容按权限保护，详见情绪关怀记录）')
+      advice.push('产妇情绪需要重点关注，社区已建立情绪关怀档案并安排回访，请家人多陪伴、多分担照护，保证妈妈休息。')
+    }
+  }
+
   // —— 家庭照护能力 ——
   const care = v.care_ability || archive.care_ability
   if (care === '薄弱') {
@@ -158,7 +175,7 @@ export function assessVisit(archive, v) {
   const needRecheck = !needReferral && (level >= 2 || (v.bilirubin != null && Number(v.bilirubin) >= threshold - NEAR_GAP * 2))
   const needLactation = (freq > 0 && freq < 8) || (weightLossPct != null && weightLossPct > 7) ||
     ['涨奶', '乳头皲裂', '红肿热痛'].includes(v.breast)
-  const needPhone = ['低落', '异常', '焦虑'].includes(v.mood) || care === '薄弱' || level >= 2
+  const needPhone = ['低落', '异常', '焦虑'].includes(v.mood) || care === '薄弱' || level >= 2 || mcSev > 0
 
   if (advice.length === 0) advice.push('本次访视未见明显异常，按需喂养、注意脐部护理，不适随诊。')
 

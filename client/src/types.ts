@@ -36,9 +36,46 @@ export interface Followup {
   id: number; archive_id: number; visit_id: number | null; type: string
   title: string; detail: string; status: string; due_date: string | null
   created_by: string; created_at: string; closed_at: string | null
-  closed_by: string | null; close_note: string
+  closed_by: string | null; close_note: string; sensitive?: number
   mother_name?: string; baby_name?: string; birth_date?: string
   address?: string; contact_name?: string; contact_phone?: string
+}
+
+// 产妇情绪关怀（敏感）：护士/社区医生可见全量；家属端只见必要提醒
+export interface MoodCareLog {
+  id: number; care_id: number; kind: string
+  action: string; mood_change: string; help_accepted: string
+  note: string; created_by: string; created_at: string
+}
+
+export interface MoodCare {
+  id: number; archive_id: number; visit_id: number | null
+  source: 'nurse_visit' | 'family_report'
+  persistent_crying: string; sleep_quality: string
+  epds_score: number | null; family_support: string; care_hands: string
+  self_harm: string; risk_factors: string[]; mood_text: string
+  advice: string; note: string; status: string
+  created_by: string; created_at: string
+  closed_at: string | null; closed_by: string | null; close_note: string
+  severity: string; logs: MoodCareLog[]
+}
+
+export interface MoodConflict {
+  dimension: string
+  nurseValue: string; nurseTime: string; nurseSource: string
+  familyValue: string; familyTime: string; familySource: string
+}
+
+export interface MoodCarePayload {
+  persistent_crying?: string; sleep_quality?: string
+  epds_score?: number | null; family_support?: string
+  self_harm?: string; risk_factors?: string[]; advice?: string
+}
+
+export interface FamilyMoodReminder { active: boolean; actions: string[]; reminder: string }
+export interface FamilyMoodReport {
+  id: number; mood_text: string; sleep_quality: string; care_hands: string
+  note: string; status: string; created_at: string
 }
 
 export interface DocumentItem { id: number; type: string; filename: string; data_url?: string; note: string; created_at: string }
@@ -48,10 +85,11 @@ export interface EventItem { id: number; kind: string; title: string; detail: st
 export interface ArchiveDetail {
   archive: Archive; appointments: Appointment[]; visits: Visit[]
   followups: Followup[]; documents: DocumentItem[]; consults: Consult[]; events: EventItem[]
+  moodCares?: MoodCare[]; moodConflicts?: MoodConflict[]; moodRiskSources?: string[]
 }
 
 export interface Dashboard {
-  stats: { unvisited: number; jaundiceAlerts: number; maternalRisks: number; openFollowups: number; todayAppointments: number }
+  stats: { unvisited: number; jaundiceAlerts: number; maternalRisks: number; moodCares?: number; openFollowups: number; todayAppointments: number }
   followupsByType: Record<string, number>
   todayAppointments: Appointment[]
   recentHighRiskVisits: { id: number; visit_time: string; risk_level: string; bilirubin: number | null; weight: number | null; archive_id: number; mother_name: string; baby_name: string }[]
@@ -61,6 +99,7 @@ export interface FamilyOverview {
   archive: Archive; visits: Visit[]; followups: Followup[]
   nextAppointment: Appointment | null; appointments: Appointment[]
   documents: DocumentItem[]; consults: Consult[]
+  moodCare?: FamilyMoodReminder | null; moodReports?: FamilyMoodReport[]
 }
 
 // 访视表单载荷（也是离线草稿的内容）
@@ -74,6 +113,7 @@ export interface VisitPayload {
   feeding_type?: string; feeding_freq?: number; spit_up?: string; sleep?: string
   breast?: string; mood?: string; wound_check?: string; care_ability?: string
   device_issue?: boolean; photos?: string[]; advice?: string
+  mood_care?: MoodCarePayload
 }
 
 export interface Assessment {
